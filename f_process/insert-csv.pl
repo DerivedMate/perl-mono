@@ -3,7 +3,8 @@ use warnings;
 use strict;
 use Text::Trim qw(trim);
 
-my ($term, $fname, $db_name) = @ARGV or die "Usage: insert-csv <file> <field-term>";
+my ($term, $fname, $db_name) = @ARGV 
+    or die "Usage: insert-csv <field-term> <file> <db-name>";
 
 open(DATA, "<$fname");
 my $label_line = <DATA>;
@@ -67,7 +68,7 @@ while (my $l = <DATA>) {
     @prev = @next;
 }
 
-# the primary key
+# get the primary key
 my $found_id = 0;
 foreach my $i (@r) {
     if (not $found_id) {
