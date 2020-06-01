@@ -1,6 +1,6 @@
 
-create database if not exists test98;
-use test98;
+create database if not exists db;
+use db;
 create table uczniowie (
 	id_ucznia varchar(255) primary key,
 	imie varchar(255),

@@ -2,9 +2,14 @@
 use warnings;
 use strict;
 use Text::Trim qw(trim);
+use Benchmark;
 
-my ($term, $fname, $db_name) = @ARGV 
-    or die "Usage: insert-csv <field-term> <file> <db-name>";
+my $t0 = Benchmark->new();
+
+if ($#ARGV < 3) {
+    die "Usage: insert-csv <field-term> <file> <db-name>";
+}
+my ($term, $fname, $db_name) = @ARGV;
 
 open(DATA, "<$fname");
 my $label_line = <DATA>;
@@ -31,15 +36,26 @@ sub estab_type {
         } elsif ($old_t eq VCHAR) {
             VCHAR
         }
+    } elsif (my ($pre_dot, $post_dot) = ($field =~ /^(\d+)\.(\d+)$/)) { # Decimal
+        my ($pre_len, $post_len) = map {length $_} ($pre_dot, $post_dot);
+        if ($old_t =~ /decimal/) {
+            my ($pre_old, $post_old) = ($old_t =~ /decimal\((\d+),(\d+)\)/);
+            my $pre_new = $pre_old > $pre_len ? $pre_old : $pre_len;
+            my $post_new = $post_old > $post_len ? $post_old : $post_len;
+
+            "decimal($pre_new,$post_new)"
+        } else {
+            "decimal($pre_len,$post_len)"
+        }
     } elsif ($field =~ /^\d{4}\-\d{2}\-\d{2}$/) {# DATE
         DATE
     } elsif ($field =~ /^\-?\d{3}\:\d{2}\:\d{2}$/) {# TIME
         TIME
     } elsif ($field =~ /^\d{4}\-\d{2}\-\d{2} \-?\d{3}\:\d{2}\:\d{2}$/) { # DATETIME
         DATETIME
-    } elsif ($field =~ /^[A-z0-9]$/) {
+    } elsif ($field =~ /^[A-z0-9]$/) { # Blob
         BLOB
-    } elsif ($field =~ /[\p{L}\w\d\s]*/) {
+    } elsif ($field =~ /[\p{L}\w\d\s]*/) { # Text
         if (length $field > 255) {
             TEXT
         } else {
@@ -51,7 +67,7 @@ sub estab_type {
 }
 
 # Establish data types
-my @prev = map {NONE} (0..($#labels));
+my @prev = map {NONE} @r;
 while (my $l = <DATA>) {
     my @data = map {trim $_} (split($term, $l));
     
@@ -99,5 +115,8 @@ foreach my $i (@r) {
 
 $cmd .= "set global local_infile = True;\nload data local infile '$fname' into table $table_name fields terminated by '$term' ignore 1 lines;\n";
 print $cmd;
+my $t1 = Benchmark->new();
+my $td = timestr timediff($t1, $t0);
+print STDERR "[insert-csv] took $td\n";
 
 close DATA;
