@@ -6,7 +6,7 @@ use Benchmark;
 
 my $t0 = Benchmark->new();
 
-if ($#ARGV < 3) {
+if ($#ARGV < 2) {
     die "Usage: insert-csv <field-term> <file> <db-name>";
 }
 my ($term, $fname, $db_name) = @ARGV;
@@ -37,7 +37,7 @@ sub estab_type {
             VCHAR
         }
     } elsif (my ($pre_dot, $post_dot) = ($field =~ /^(\d+)\.(\d+)$/)) { # Decimal
-        my ($pre_len, $post_len) = map {length $_} ($pre_dot, $post_dot);
+        my ($pre_len, $post_len) = map {length $_} ($pre_dot.$post_dot, $post_dot);
         if ($old_t =~ /decimal/) {
             my ($pre_old, $post_old) = ($old_t =~ /decimal\((\d+),(\d+)\)/);
             my $pre_new = $pre_old > $pre_len ? $pre_old : $pre_len;
@@ -75,7 +75,6 @@ while (my $l = <DATA>) {
         die "Inconsistent entry length";
     }
     
-    my @r = (0..($#data));
     my @next;
     foreach my $i (@r) {
         push (@next, (estab_type ($prev[$i], $data[$i])));
@@ -87,7 +86,7 @@ while (my $l = <DATA>) {
 # get the primary key
 my $found_id = 0;
 foreach my $i (@r) {
-    if (not $found_id) {
+    if ($found_id == 0) {
         my $l = $labels[$i];
 
         if ($l =~ /(^id|id$)/) {
@@ -108,13 +107,16 @@ use $db_name;
 create table $table_name (
 ";
 
+# Insert field types
 foreach my $i (@r) {
     my ($lbl, $type) = map {trim  $_} ($labels[$i], $prev[$i]);
     $cmd .= "\t$lbl $type" . ($i == $#r ? "\n);\n" : ",\n");
 }
 
+# Add an insertion command
 $cmd .= "set global local_infile = True;\nload data local infile '$fname' into table $table_name fields terminated by '$term' ignore 1 lines;\n";
 print $cmd;
+
 my $t1 = Benchmark->new();
 my $td = timestr timediff($t1, $t0);
 print STDERR "[insert-csv] took $td\n";
