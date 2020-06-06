@@ -4,5 +4,11 @@
 !_TAG_PROGRAM_NAME	Exuberant Ctags	//
 !_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
 !_TAG_PROGRAM_VERSION	5.9~svn20110310	//
-estab_type	insert-csv.pl	30;"	s
+estab_type	insert-csv.pl	60;"	s
+extract_char	insert-csv.pl	24;"	s
+extract_dec	insert-csv.pl	44;"	s
+file_cmd	insert-csv.pl	106;"	s
+merge_types	insert-csv.pl	88;"	s
+resolve_char	insert-csv.pl	29;"	s
+resolve_decimal	insert-csv.pl	49;"	s
 run	recd-rem.pl	5;"	s

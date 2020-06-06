@@ -2,23 +2,11 @@
 use warnings;
 use strict;
 use Text::Trim qw(trim);
+use List::Util qw[min max];
 use Benchmark;
-
-my $t0 = Benchmark->new();
-
-if ($#ARGV < 2) {
-    die "Usage: insert-csv <field-term> <file> <db-name>";
-}
-my ($term, $fname, $db_name) = @ARGV;
-
-open(DATA, "<$fname");
-my $label_line = <DATA>;
-my @labels = map {lcfirst $_} (split($term, $label_line));
-my @r = (0..$#labels);
 
 use constant {
     INT => 'int',
-    VCHAR => 'varchar(255)',
     DATE => 'date',
     TIME => 'time',
     DATETIME => 'datetime',
@@ -27,26 +15,56 @@ use constant {
     NONE => 'NONE',
 };
 
+my $t0 = Benchmark->new();
+
+if ($#ARGV < 2) {
+    die "Usage: insert-csv <field-term> <file> <db-name>";
+}
+
+sub extract_char {
+    my $t = shift;
+    my ($n) = ($t =~ /(?:var)?char\((\d+)\)/);
+    $n
+}
+sub resolve_char {
+    my ($old, $new) = (shift, shift);
+    my $a = extract_char $old;
+    my $b = extract_char $new;
+
+    if ($a != $b) {
+        my $c = max ($a, $b);
+        "varchar($c)"
+    } elsif ($old =~ /var/) {
+        "varchar($b)"
+    } else {
+        "char($b)"
+    }
+}
+
+sub extract_dec {
+    my $t = shift;
+    my ($n, $m) = ($t =~ /decimal\((\d+),(\d+)\)/);
+    ($n, $m)
+}
+sub resolve_decimal {
+    my ($old, $new) = (shift, shift);
+    my ($old_a, $old_b) = extract_dec $old;
+    my ($new_a, $new_b) = extract_dec $new;
+
+    my $a = max ($old_a, $new_a);
+    my $b = max ($old_b, $new_b);
+
+    "decimal($a,$b)"
+}
+
 sub estab_type {
-    my ($old_t, $field) = (shift, shift);
+    my $field = shift;
 
     if ($field =~ /^\d+$/) { # INT
-        if ($old_t eq NONE or $old_t eq INT) {
-            INT
-        } elsif ($old_t eq VCHAR) {
-            VCHAR
-        }
+        INT
     } elsif (my ($pre_dot, $post_dot) = ($field =~ /^(\d+)\.(\d+)$/)) { # Decimal
         my ($pre_len, $post_len) = map {length $_} ($pre_dot.$post_dot, $post_dot);
-        if ($old_t =~ /decimal/) {
-            my ($pre_old, $post_old) = ($old_t =~ /decimal\((\d+),(\d+)\)/);
-            my $pre_new = $pre_old > $pre_len ? $pre_old : $pre_len;
-            my $post_new = $post_old > $post_len ? $post_old : $post_len;
-
-            "decimal($pre_new,$post_new)"
-        } else {
-            "decimal($pre_len,$post_len)"
-        }
+        "decimal($pre_len,$post_len)"
     } elsif ($field =~ /^\d{4}\-\d{2}\-\d{2}$/) {# DATE
         DATE
     } elsif ($field =~ /^\-?\d{3}\:\d{2}\:\d{2}$/) {# TIME
@@ -59,66 +77,103 @@ sub estab_type {
         if (length $field > 255) {
             TEXT
         } else {
-            VCHAR
+            my $l = length $field;
+            "char($l)"
         }
     } else {
-        $old_t
+        NONE
     }
 }
 
-# Establish data types
-my @prev = map {NONE} @r;
-while (my $l = <DATA>) {
-    my @data = map {trim $_} (split($term, $l));
-    
-    if (scalar @data != scalar @prev and (scalar @data) != 0) {
-        die "Inconsistent entry length";
-    }
-    
-    my @next;
-    foreach my $i (@r) {
-        push (@next, (estab_type ($prev[$i], $data[$i])));
-    }
+sub merge_types {
+    my ($old, $new) = (shift, shift);
 
-    @prev = @next;
+    if ($old eq NONE) {
+        $new
+    } elsif ($new eq TEXT) {
+        TEXT
+    } elsif ($old =~ /char/ and $new =~/char/) {
+        resolve_char $old, $new
+    } elsif ($old =~ /decimal/ and $new eq INT) {
+        $old
+    } elsif ($new =~ /decimal/ and $old eq INT) {
+        $new
+    } else {
+        $old
+    }
 }
 
-# get the primary key
-my $found_id = 0;
-foreach my $i (@r) {
-    if ($found_id == 0) {
-        my $l = $labels[$i];
+sub file_cmd {
+    my ($fname, $term, $db_name) = (shift, shift, shift);
 
-        if ($l =~ /(^id|id$)/) {
-            my $old = $prev[$i];
-            $prev[$i] = "$old primary key";
-            $found_id = 1;
+    open(my $fh, "<$fname");
+    my $label_line = <$fh>;
+    my @labels = map {lcfirst $_} (split($term, $label_line));
+    my @r = (0..$#labels);
+
+    # Establish data types
+    my @prev = map {NONE} @r;
+    while (my $l = <$fh>) {
+        my @data = map {trim $_} (split($term, $l));
+
+        if (scalar @data != scalar @prev and (scalar @data) != 0) {
+            die "Inconsistent entry length";
         }
+
+        my @next;
+        foreach my $i (@r) {
+            my $new = estab_type $data[$i];
+            push (@next, merge_types ($prev[$i], $new));
+        }
+
+        @prev = @next;
     }
+
+    # get the primary key
+    my $found_id = 0;
+    foreach my $i (@r) {
+        my $l = $labels[$i];
+            if ($l =~ /(^id|id$)/) {
+                my $old = $prev[$i];
+                if ($found_id == 0) {
+                    $prev[$i] = "$old primary key";
+                    $found_id = 1;
+                } else {
+                    $prev[$i] = "$old not null";
+                }
+            }
+    }
+
+    # get the table name
+    my ($table_name) = ($fname =~ m/([\w_\d]+)\.\w+$/);
+
+    # Create the output script
+    my $cmd = "create table $table_name (\n";
+
+    # Insert field types
+    foreach my $i (@r) {
+        my ($lbl, $type) = map {trim  $_} ($labels[$i], $prev[$i]);
+        $cmd .= "\t$lbl $type" . ($i == $#r ? "\n);\n" : ",\n");
+    }
+
+    # Add an insertion command
+    $cmd .= "load data local infile '$fname' into table $table_name fields terminated by '$term' ignore 1 lines;\n\n";
+    print $cmd;
+
+    close $fh;
 }
 
-# get the table name
-my ($table_name) = ($fname =~ m/^(.+)\..+$/);
+my ($source, $del, $db_name) = (shift, shift, shift);
+print "create database if not exists $db_name;use $db_name;\nset global local_infile = True;\n";
 
-# Create the output script
-my $cmd = "
-create database if not exists $db_name;
-use $db_name;
-create table $table_name (
-";
+open (my $srch, "<$source") or die $!;
 
-# Insert field types
-foreach my $i (@r) {
-    my ($lbl, $type) = map {trim  $_} ($labels[$i], $prev[$i]);
-    $cmd .= "\t$lbl $type" . ($i == $#r ? "\n);\n" : ",\n");
+foreach my $f (<$srch>) {
+    $f = trim $f;
+    file_cmd $f, $del, $db_name
 }
 
-# Add an insertion command
-$cmd .= "set global local_infile = True;\nload data local infile '$fname' into table $table_name fields terminated by '$term' ignore 1 lines;\n";
-print $cmd;
-
+close $srch;
 my $t1 = Benchmark->new();
 my $td = timestr timediff($t1, $t0);
 print STDERR "[insert-csv] took $td\n";
-
-close DATA;
